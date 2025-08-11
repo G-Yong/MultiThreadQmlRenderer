@@ -1,4 +1,6 @@
 # MultiThreadQmlRenderer
+>Qt版本:`5.15.2`
+
 使用多线程来渲染qml，使得主线程能够具备更好的实时性   
 本类的实现主要是参考了Qt自带的例程【QQuickRenderControl Example】   
 相较于【QQuickRenderControl Example】，主要做了两个改动:   
