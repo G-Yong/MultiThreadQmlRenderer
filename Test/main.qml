@@ -21,7 +21,6 @@ Rectangle{
         font.pixelSize: 178
     }
 
-
     Scene3D {
         id: scene3d
         anchors.fill: parent

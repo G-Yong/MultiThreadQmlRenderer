@@ -20,19 +20,6 @@
 #include <QElapsedTimer>
 #include <QPainter>
 
-/*
-  This implementation runs the Qt Quick scenegraph's sync and render phases on a
-  separate, dedicated thread.  Rendering the cube using our custom OpenGL engine
-  happens on that thread as well.  This is similar to the built-in threaded
-  render loop, but does not support all the features. There is no support for
-  getting Animators running on the render thread for example.
-
-  We choose to use QObject's event mechanism to communicate with the QObject
-  living on the render thread. An alternative would be to subclass QThread and
-  reimplement run() with a custom event handling approach, like
-  QSGThreadedRenderLoop does. That would potentially lead to better results but
-  is also more complex.
-*/
 
 static const QEvent::Type INIT = QEvent::Type(QEvent::User + 1);
 static const QEvent::Type RENDER = QEvent::Type(QEvent::User + 2);
@@ -320,7 +307,7 @@ int ZQuickWidget::setSource(QUrl url)
     QTimer::singleShot(2000, [=](){
         // qDebug() << "start quick:" << mQmlFile;
 
-        // 查找到主窗口句柄
+        // 向上查找到窗口句柄
         QWindow *wh = nullptr;
         QWidget *w = this;
         do{
@@ -345,6 +332,7 @@ int ZQuickWidget::setSource(QUrl url)
         startQuick(mQmlFile);
     });
 
+    // 目前无法正常接收场景刷新信号，只能通过一个定时器来刷新
     QTimer *uTimer = new QTimer();
     connect(uTimer, &QTimer::timeout, this, [=](){
         requestUpdate();
@@ -421,6 +409,9 @@ void ZQuickWidget::polishSyncAndRender()
 
     // qDebug() << "主窗口渲染耗时-->b:" << timer.elapsed();
 
+    // 很想把这里也给替换掉，因为这里也是在等待的。
+    // 理论上，在这里等待期间，也可以进行 qApp->processEvents();
+    // 但是做了测试，貌似会崩溃
     // Wait until sync is complete.
     m_quickRenderer->cond()->wait(m_quickRenderer->mutex());
     // while (m_quickRenderer->mFinished == false) {
@@ -433,7 +424,6 @@ void ZQuickWidget::polishSyncAndRender()
     // qDebug() << "主窗口渲染耗时:" << timer.elapsed();
 
     // without blocking？ 前面的wait不是已经bloking了吗？
-
     // Rendering happens on the render thread without blocking the gui (main)
     // thread. This is good because the blocking swap (waiting for vsync)
     // happens on the render thread, not blocking other work.
@@ -520,5 +510,25 @@ void ZQuickWidget::mousePressEvent(QMouseEvent *e)
 void ZQuickWidget::mouseReleaseEvent(QMouseEvent *e)
 {
     QMouseEvent mappedEvent(e->type(), e->localPos(), e->screenPos(), e->button(), e->buttons(), e->modifiers());
+    QCoreApplication::sendEvent(m_quickWindow, &mappedEvent);
+}
+
+void ZQuickWidget::mouseMoveEvent(QMouseEvent *e)
+{
+    QMouseEvent mappedEvent(e->type(), e->localPos(), e->screenPos(), e->button(), e->buttons(), e->modifiers());
+    QCoreApplication::sendEvent(m_quickWindow, &mappedEvent);
+}
+
+void ZQuickWidget::wheelEvent(QWheelEvent *e)
+{
+    QWheelEvent mappedEvent(e->position(),
+                            e->globalPosition(),
+                            e->pixelDelta(),
+                            e->angleDelta(),
+                            e->buttons(),
+                            e->modifiers(),
+                            e->phase(),
+                            e->inverted(),
+                            e->source());
     QCoreApplication::sendEvent(m_quickWindow, &mappedEvent);
 }
