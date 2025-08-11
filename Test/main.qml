@@ -14,11 +14,12 @@ Rectangle{
 
     Text {
         id: name
-        anchors.fill: parent
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
 
         text: qsTr("3d压力测试")
 
-        font.pixelSize: 178
+        font.pixelSize: 100
     }
 
     Scene3D {
@@ -57,6 +58,22 @@ Rectangle{
                 },
                 InputSettings { }
             ]
+
+            // Entity {
+            //     enabled: true
+            //     components: [
+            //         DirectionalLight {
+            //             worldDirection: Qt.vector3d(0, 0, -1)
+            //             intensity: 0.5
+            //             color: "#ffffff"
+            //         },
+            //         SpotLight {
+            //             intensity: 1
+            //             color: "#ffffff"
+            //         }
+            //     ]
+            // }
+
 
             PhongMaterial {
                 id: material
@@ -133,14 +150,6 @@ Rectangle{
         anchors.centerIn: parent
         text: qsTr("--------")
         onClicked: {
-        }
-    }
-
-    Repeater{
-        model: 10
-        delegate: Button{
-            x: index % 10
-            y: index % 10
         }
     }
 

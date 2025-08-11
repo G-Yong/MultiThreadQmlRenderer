@@ -21,15 +21,16 @@
 #include <QPainter>
 
 
-static const QEvent::Type INIT = QEvent::Type(QEvent::User + 1);
+static const QEvent::Type INIT   = QEvent::Type(QEvent::User + 1);
 static const QEvent::Type RENDER = QEvent::Type(QEvent::User + 2);
 static const QEvent::Type RESIZE = QEvent::Type(QEvent::User + 3);
-static const QEvent::Type STOP = QEvent::Type(QEvent::User + 4);
+static const QEvent::Type STOP   = QEvent::Type(QEvent::User + 4);
 
 static const QEvent::Type UPDATE = QEvent::Type(QEvent::User + 5);
 
 QuickRenderer::QuickRenderer()
-    : m_context(nullptr),
+    :
+    m_context(nullptr),
     m_surface(nullptr),
     m_fbo(nullptr),
     m_quickWindow(nullptr),
@@ -145,14 +146,13 @@ void QuickRenderer::render(QMutexLocker *lock)
     // Synchronization and rendering happens here on the render thread.
     m_renderControl->sync();
 
-
     // ui线程目前可以继续操作了
     // The gui thread can now continue.
     m_cond.wakeOne();
     lock->unlock();
 
-    mFinished = true;
     mProcessState = 2;
+    mFinished = true;
 
     // qDebug() << "渲染同步到ui耗时：" << timer.elapsed();
 
@@ -161,7 +161,7 @@ void QuickRenderer::render(QMutexLocker *lock)
     m_context->functions()->glFlush();
 
     // m_renderControl->grab().save("123.png");
-    emit rendered(m_renderControl->grab().copy());
+    emit rendered(m_renderControl->grab().copy()); // 这里是否需要copy还得测试测试
 
     // qDebug() << "子线程渲染耗时：" << timer.elapsed();
 
@@ -178,7 +178,11 @@ void QuickRenderer::aboutToQuit()
 class RenderControl : public QQuickRenderControl
 {
 public:
-    explicit RenderControl(QObject *parent = nullptr){}
+    explicit RenderControl(QObject *parent = nullptr) :
+        QQuickRenderControl(parent)
+    {
+
+    }
     void setWindow(QWindow *w)
     {
         m_window = w;
@@ -226,13 +230,12 @@ ZQuickWidget::ZQuickWidget(QWidget *parent)
     // m_renderControl = new RenderControl(this);
     m_renderControl = new RenderControl();
 
-
     // Create a QQuickWindow that is associated with out render control. Note that this
     // window never gets created or shown, meaning that it will never get an underlying
     // native (platform) window.
     m_quickWindow = new QQuickWindow(m_renderControl);
 
-    // 将窗口给回去
+    // 将窗口给回去，renderWindow这个函数会用到
     ((RenderControl*)m_renderControl)->setWindow(m_quickWindow);
 
     // Create a QML engine.
@@ -267,11 +270,12 @@ ZQuickWidget::ZQuickWidget(QWidget *parent)
 
     m_quickRendererThread->start();
 
+    // 现在不知道为啥，这两个信号都失效了
     // Now hook up the signals. For simplicy we don't differentiate
     // between renderRequested (only render is needed, no sync) and
     // sceneChanged (polish and sync is needed too).
     connect(m_renderControl, &QQuickRenderControl::renderRequested, this, &ZQuickWidget::requestUpdate);
-    connect(m_renderControl, &QQuickRenderControl::sceneChanged, this, &ZQuickWidget::requestUpdate);
+    connect(m_renderControl, &QQuickRenderControl::sceneChanged,    this, &ZQuickWidget::requestUpdate);
 }
 
 ZQuickWidget::~ZQuickWidget()
@@ -292,6 +296,8 @@ ZQuickWidget::~ZQuickWidget()
 
     delete m_offscreenSurface;
     delete m_context;
+
+    delete m_quickRenderer;
 }
 
 int ZQuickWidget::setSource(QUrl url)
@@ -338,13 +344,13 @@ bool ZQuickWidget::event(QEvent *e)
 
 void ZQuickWidget::paintEvent(QPaintEvent *event)
 {
+    Q_UNUSED(event)
+
     QPainter painter(this);
     if(mImg.isNull() == false)
     {
         painter.drawImage(0, 0, mImg);
     }
-
-    // qDebug() << "painter";
 }
 
 void ZQuickWidget::polishSyncAndRender()
@@ -369,10 +375,10 @@ void ZQuickWidget::polishSyncAndRender()
 
     // qDebug() << "主窗口请求渲染";
 
-    Q_ASSERT(QThread::currentThread() == thread());
+    // Q_ASSERT(QThread::currentThread() == thread());
 
-    // Polishing happens on the gui thread.
-    m_renderControl->polishItems();
+    // // Polishing happens on the gui thread.
+    m_renderControl->polishItems(); // 这个耗时很厉害
 
     // qDebug() << "主窗口渲染耗时-->a:" << timer.elapsed();
 
@@ -382,16 +388,23 @@ void ZQuickWidget::polishSyncAndRender()
 
     // qDebug() << "主窗口渲染耗时-->b:" << timer.elapsed();
 
+    // timer.start();
+
+    // 这里好像不怎么耗时。。。。。
     // 很想把这里也给替换掉，因为这里也是在等待的。
     // 理论上，在这里等待期间，也可以进行 qApp->processEvents();
     // 但是做了测试，貌似会崩溃
     // Wait until sync is complete.
     m_quickRenderer->cond()->wait(m_quickRenderer->mutex());
+
+    // // 好像 QWaitCondition::wait 会有 unlock的效果？
+    // // 是不是需要unlock一下？
+    // // 前面不用QMutexLocker就行
     // while (m_quickRenderer->mFinished == false) {
     //     qApp->processEvents();
-
-    //     // qDebug() << m_quickRenderer->mProcessState;
-    //     QThread::msleep(100);
+    //     // qDebug() << m_quickRenderer->mProcessState
+    //     //          << m_quickRenderer->mHasPostRender;
+    //     // QThread::msleep(100);
     // }
 
     // qDebug() << "主窗口渲染耗时:" << timer.elapsed();
@@ -404,6 +417,8 @@ void ZQuickWidget::polishSyncAndRender()
 
 void ZQuickWidget::run()
 {
+    qDebug() << "status changed:" << m_qmlComponent->status();
+
     disconnect(m_qmlComponent, &QQmlComponent::statusChanged, this, &ZQuickWidget::run);
 
     if (m_qmlComponent->isError()) {

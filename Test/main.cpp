@@ -25,37 +25,40 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
 
 
+#define USE_CUSTOM
+#ifdef USE_CUSTOM
+    // 自行实现的qml渲染器
+    ZQuickWidget *qWidget = new ZQuickWidget();
+#else
     // Qt自带的渲染引擎
-    // QQuickWidget qWidget;
-    // // 自行实现的qml渲染器
-    ZQuickWidget qWidget;
-    qWidget.setSource(QUrl("qrc:/main.qml"));
-    qWidget.setResizeMode(QQuickWidget::SizeRootObjectToView);
-    // qWidget.show();
+    QQuickWidget *qWidget = new QQuickWidget();
+#endif
+    qWidget->setSource(QUrl("qrc:/main.qml"));
+    qWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
 
 
     // 主界面元素，可以查看UI线程是否保持正常的实时性
-    QProgressBar bar(&qWidget);
-    bar.resize(500, 50);
-    bar.setValue(50);
-    bar.show();
+    QProgressBar *bar = new QProgressBar(qWidget);
+    bar->resize(500, 50);
+    bar->setValue(50);
+    bar->show();
     QTimer pTimer;
     QObject::connect(&pTimer, &QTimer::timeout, &app, [&](){
-        int val = bar.value();
+        int val = bar->value();
         val++;
         if(val > 100)
         {
             val = 0;
         }
-        bar.setValue(val);
+        bar->setValue(val);
     });
     pTimer.start(10);
 
     QWidget widget;
-    QHBoxLayout layout;
-    layout.addWidget(new QCalendarWidget(), 1);
-    layout.addWidget(&qWidget, 2);
-    widget.setLayout(&layout);
+    QHBoxLayout *layout = new QHBoxLayout();
+    layout->addWidget(new QCalendarWidget(), 1);
+    layout->addWidget(qWidget, 2);
+    widget.setLayout(layout);
     widget.resize(800, 600);
     widget.show();
 
