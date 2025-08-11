@@ -20,9 +20,9 @@ QT_FORWARD_DECLARE_CLASS(QQmlEngine)
 QT_FORWARD_DECLARE_CLASS(QQmlComponent)
 QT_FORWARD_DECLARE_CLASS(QQuickItem)
 
+#ifdef Q_OS_WIN
 #pragma execution_character_set("utf-8")
-
-class PlaneRenderer;
+#endif
 
 class QuickRenderer : public QObject
 {
@@ -41,7 +41,6 @@ public:
 
     void setContext(QOpenGLContext *ctx) { m_context = ctx; }
     void setSurface(QOffscreenSurface *s) { m_surface = s; }
-    void setWindow(QWindow *w) { m_window = w; }
     void setQuickWindow(QQuickWindow *w) { m_quickWindow = w; }
     void setRenderControl(QQuickRenderControl *r) { m_renderControl = r; }
 
@@ -52,6 +51,7 @@ public:
 
     volatile int mProcessState = 0;
     volatile bool mFinished = false;
+    volatile bool mHasPostRender = false;
 
 signals:
     void rendered(QImage img);
@@ -68,7 +68,6 @@ private:
     QOpenGLContext *m_context;
     QOffscreenSurface *m_surface;
     QOpenGLFramebufferObject *m_fbo;
-    QWindow *m_window;
     QQuickWindow *m_quickWindow;
     QQuickRenderControl *m_renderControl;
     QMutex m_quitMutex;
@@ -98,7 +97,7 @@ protected:
     void mousePressEvent(QMouseEvent *e) override;
     void mouseReleaseEvent(QMouseEvent *e) override;
     void mouseMoveEvent(QMouseEvent *e) override;
-    void wheelEvent(QWheelEvent *e);
+    void wheelEvent(QWheelEvent *e) override;
     bool event(QEvent *e) override;
 
     void paintEvent(QPaintEvent *event) override;

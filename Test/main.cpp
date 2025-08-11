@@ -24,9 +24,13 @@ int main(int argc, char *argv[])
     }
     QApplication app(argc, argv);
 
-    // qml渲染器
+
+    // Qt自带的渲染引擎
+    // QQuickWidget qWidget;
+    // // 自行实现的qml渲染器
     ZQuickWidget qWidget;
     qWidget.setSource(QUrl("qrc:/main.qml"));
+    qWidget.setResizeMode(QQuickWidget::SizeRootObjectToView);
     // qWidget.show();
 
 

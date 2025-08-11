@@ -32,7 +32,6 @@ QuickRenderer::QuickRenderer()
     : m_context(nullptr),
     m_surface(nullptr),
     m_fbo(nullptr),
-    m_window(nullptr),
     m_quickWindow(nullptr),
     m_renderControl(nullptr),
     m_quit(false),
@@ -47,6 +46,7 @@ void QuickRenderer::requestInit()
 
 void QuickRenderer::requestRender()
 {
+    mHasPostRender = true;
     QCoreApplication::postEvent(this, new QEvent(RENDER));
 }
 
@@ -72,6 +72,7 @@ bool QuickRenderer::event(QEvent *e)
         // 之所以主线程需要等那么久，是因为本线程还在处理，
         // 无法进入事件处理，因此一直在等待
         render(&lock);
+        mHasPostRender = false;
     }
         return true;
     case RESIZE:
@@ -113,8 +114,6 @@ void QuickRenderer::cleanup()
 
 void QuickRenderer::ensureFbo()
 {
-    // qDebug() << m_window->size();
-
     if (m_fbo && m_fbo->size() != m_widget->size() * m_widget->devicePixelRatio()) {
         delete m_fbo;
         m_fbo = nullptr;
@@ -134,11 +133,6 @@ void QuickRenderer::render(QMutexLocker *lock)
 
     QElapsedTimer timer;
     timer.start();
-
-    // qDebug() << "m window:" << m_window;
-    // qDebug() << "===" << m_surface << m_window->size() << m_window->devicePixelRatio();
-
-    Q_ASSERT(QThread::currentThread() != m_window->thread());
 
     if (!m_context->makeCurrent(m_surface)) {
         qWarning("Failed to make context current on render thread");
@@ -189,18 +183,16 @@ public:
     {
         m_window = w;
     }
-    QWindow *renderWindow(QPoint *offset) override;
+    QWindow *renderWindow(QPoint *offset) override{
+        if (offset)
+            *offset = QPoint(0, 0);
+
+        return m_window;
+    }
 
 private:
     QWindow *m_window = nullptr;
 };
-QWindow *RenderControl::renderWindow(QPoint *offset)
-{
-    if (offset)
-        *offset = QPoint(0, 0);
-
-    return m_window;
-}
 
 
 ZQuickWidget::ZQuickWidget(QWidget *parent)
@@ -240,6 +232,9 @@ ZQuickWidget::ZQuickWidget(QWidget *parent)
     // native (platform) window.
     m_quickWindow = new QQuickWindow(m_renderControl);
 
+    // 将窗口给回去
+    ((RenderControl*)m_renderControl)->setWindow(m_quickWindow);
+
     // Create a QML engine.
     m_qmlEngine = new QQmlEngine;
     if (!m_qmlEngine->incubationController())
@@ -255,7 +250,6 @@ ZQuickWidget::ZQuickWidget(QWidget *parent)
 
     // These live on the gui thread. Just give access to them on the render thread.
     m_quickRenderer->setSurface(m_offscreenSurface);
-    // m_quickRenderer->setWindow(this->windowHandle()); // 此时还没创建
     m_quickRenderer->setWidget(this);
     m_quickRenderer->setQuickWindow(m_quickWindow);
     m_quickRenderer->setRenderControl(m_renderControl);
@@ -304,33 +298,7 @@ int ZQuickWidget::setSource(QUrl url)
 {
     mQmlFile = url.url();
 
-    QTimer::singleShot(2000, [=](){
-        // qDebug() << "start quick:" << mQmlFile;
-
-        // 向上查找到窗口句柄
-        QWindow *wh = nullptr;
-        QWidget *w = this;
-        do{
-            if(w == nullptr)
-            {
-                break;
-            }
-
-            wh = w->windowHandle();
-            if(wh != nullptr)
-            {
-                break;
-            }
-            else
-            {
-                w = w->parentWidget();
-            }
-        }while(1);
-
-        ((RenderControl*)m_renderControl)->setWindow(wh);
-        m_quickRenderer->setWindow(wh);
-        startQuick(mQmlFile);
-    });
+    startQuick(mQmlFile);
 
     // 目前无法正常接收场景刷新信号，只能通过一个定时器来刷新
     QTimer *uTimer = new QTimer();
@@ -385,9 +353,15 @@ void ZQuickWidget::polishSyncAndRender()
 
     // 假如还在渲染中，就等待渲染完成后再处理
     // 期间不断处理其他事件（键盘、鼠标、绘制等）
-    while (m_quickRenderer->mProcessState > 0 && m_quickRenderer->mProcessState != 3) {
-        qApp->processEvents();
-        // return;
+    // while (m_quickRenderer->mProcessState > 0 && m_quickRenderer->mProcessState != 3) {
+    //     qApp->processEvents();
+    //     // return;
+    // }
+
+    // 假如还在渲染，就直接返回
+    if(m_quickRenderer->mHasPostRender == true)
+    {
+        return;
     }
 
     QElapsedTimer timer;
@@ -404,8 +378,7 @@ void ZQuickWidget::polishSyncAndRender()
 
     // Sync happens on the render thread with the gui thread (this one) blocked.
     QMutexLocker lock(m_quickRenderer->mutex());
-    m_quickRenderer->requestRender();
-    qApp->processEvents();
+    m_quickRenderer->requestRender(); // 发起渲染申请
 
     // qDebug() << "主窗口渲染耗时-->b:" << timer.elapsed();
 
@@ -515,7 +488,12 @@ void ZQuickWidget::mouseReleaseEvent(QMouseEvent *e)
 
 void ZQuickWidget::mouseMoveEvent(QMouseEvent *e)
 {
-    QMouseEvent mappedEvent(e->type(), e->localPos(), e->screenPos(), e->button(), e->buttons(), e->modifiers());
+    QMouseEvent mappedEvent(e->type(),
+                            e->localPos(),
+                            e->screenPos(),
+                            e->button(),
+                            e->buttons(),
+                            e->modifiers());
     QCoreApplication::sendEvent(m_quickWindow, &mappedEvent);
 }
 
