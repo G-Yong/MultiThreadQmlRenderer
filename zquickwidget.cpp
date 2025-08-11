@@ -129,6 +129,9 @@ void QuickRenderer::ensureFbo()
 
 void QuickRenderer::render(QMutexLocker *lock)
 {
+    static int counter = 0;
+    counter++;
+
     mProcessState = 1;
     mFinished = false;
 
@@ -154,18 +157,28 @@ void QuickRenderer::render(QMutexLocker *lock)
     mProcessState = 2;
     mFinished = true;
 
-    // qDebug() << "渲染同步到ui耗时：" << timer.elapsed();
+    qDebug() << "渲染同步到ui耗时：" << timer.elapsed() << counter;
 
     // Meanwhile on this thread continue with the actual rendering (into the FBO first).
     m_renderControl->render();
     m_context->functions()->glFlush();
 
-    // m_renderControl->grab().save("123.png");
-    emit rendered(m_renderControl->grab().copy()); // 这里是否需要copy还得测试测试
-
-    // qDebug() << "子线程渲染耗时：" << timer.elapsed();
-
     mProcessState = 3;
+
+
+    // 又刷新，又改变窗口大小时，有时会在这里卡死
+    // 是grab这个函数卡死
+    qDebug() << "获取图像：" << timer.elapsed() << counter;
+    // 这里是否需要copy还得测试测试。下面两种方式效率差不多
+    // QImage image = m_renderControl->grab().copy();
+    QImage image = m_quickWindow->grabWindow().copy();
+    qDebug() << "开始发送图像：" << timer.elapsed() << counter;
+    emit rendered(image);
+
+    qDebug() << "子线程渲染耗时：" << timer.elapsed() << mProcessState << counter;
+
+    // m_context->swapBuffers();
+
 }
 
 void QuickRenderer::aboutToQuit()
@@ -249,7 +262,7 @@ ZQuickWidget::ZQuickWidget(QWidget *parent)
     connect(m_quickRenderer, &QuickRenderer::rendered, this, [=](QImage img){
         mImg = img;
         update();
-    }, Qt::QueuedConnection);
+    });
 
     // These live on the gui thread. Just give access to them on the render thread.
     m_quickRenderer->setSurface(m_offscreenSurface);
@@ -355,7 +368,7 @@ void ZQuickWidget::paintEvent(QPaintEvent *event)
 
 void ZQuickWidget::polishSyncAndRender()
 {
-    // qDebug() << "processing:" << m_quickRenderer->mProcessState;
+    qDebug() << "processing:" << m_quickRenderer->mProcessState << m_quickRenderer->mHasPostRender;
 
     // 假如还在渲染中，就等待渲染完成后再处理
     // 期间不断处理其他事件（键盘、鼠标、绘制等）
@@ -364,9 +377,13 @@ void ZQuickWidget::polishSyncAndRender()
     //     // return;
     // }
 
-    // 假如还在渲染，就直接返回
+    // 假如还在渲染，
     if(m_quickRenderer->mHasPostRender == true)
     {
+        // // 处理其他事情
+        // qApp->processEvents();
+
+        // 就直接返回
         return;
     }
 
@@ -377,6 +394,7 @@ void ZQuickWidget::polishSyncAndRender()
 
     // Q_ASSERT(QThread::currentThread() == thread());
 
+    // 不执行polishItems，3d场景就渲染不出来
     // // Polishing happens on the gui thread.
     m_renderControl->polishItems(); // 这个耗时很厉害
 
@@ -386,14 +404,11 @@ void ZQuickWidget::polishSyncAndRender()
     QMutexLocker lock(m_quickRenderer->mutex());
     m_quickRenderer->requestRender(); // 发起渲染申请
 
-    // qDebug() << "主窗口渲染耗时-->b:" << timer.elapsed();
+    qDebug() << "主窗口渲染耗时-->b:" << timer.elapsed();
 
     // timer.start();
 
     // 这里好像不怎么耗时。。。。。
-    // 很想把这里也给替换掉，因为这里也是在等待的。
-    // 理论上，在这里等待期间，也可以进行 qApp->processEvents();
-    // 但是做了测试，貌似会崩溃
     // Wait until sync is complete.
     m_quickRenderer->cond()->wait(m_quickRenderer->mutex());
 

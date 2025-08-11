@@ -10,6 +10,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickWidget>
+#include <QOpenGLWidget>
 
 QT_FORWARD_DECLARE_CLASS(QOpenGLContext)
 QT_FORWARD_DECLARE_CLASS(QOpenGLFramebufferObject)
