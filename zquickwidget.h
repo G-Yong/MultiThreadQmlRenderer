@@ -9,6 +9,7 @@
 #include <QMutex>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQuickWidget>
 
 QT_FORWARD_DECLARE_CLASS(QOpenGLContext)
 QT_FORWARD_DECLARE_CLASS(QOpenGLFramebufferObject)
@@ -88,6 +89,7 @@ public:
     QQuickWindow *quickWindow() const{return m_quickWindow;}
     QQmlContext *rootContext() const{return m_qmlEngine->rootContext();}
     QQuickItem *rootObject() const{return m_rootItem;}
+    void setResizeMode(QQuickWidget::ResizeMode mode){}
 
     int setSource(QUrl url);
 
