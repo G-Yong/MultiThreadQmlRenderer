@@ -148,7 +148,7 @@ void QuickRenderer::render(QMutexLocker *lock)
     QElapsedTimer timer;
     timer.start();
 
-    qDebug() << "m window:" << m_window;
+    // qDebug() << "m window:" << m_window;
     // qDebug() << "===" << m_surface << m_window->size() << m_window->devicePixelRatio();
 
     Q_ASSERT(QThread::currentThread() != m_window->thread());
@@ -173,7 +173,7 @@ void QuickRenderer::render(QMutexLocker *lock)
     mFinished = true;
     mProcessState = 2;
 
-    qDebug() << "渲染同步到ui耗时：" << timer.elapsed();
+    // qDebug() << "渲染同步到ui耗时：" << timer.elapsed();
 
     // Meanwhile on this thread continue with the actual rendering (into the FBO first).
     m_renderControl->render();
@@ -318,7 +318,7 @@ int ZQuickWidget::setSource(QUrl url)
     mQmlFile = url.url();
 
     QTimer::singleShot(2000, [=](){
-        qDebug() << "start quick:" << mQmlFile;
+        // qDebug() << "start quick:" << mQmlFile;
 
         // 查找到主窗口句柄
         QWindow *wh = nullptr;
@@ -393,7 +393,7 @@ void ZQuickWidget::paintEvent(QPaintEvent *event)
 
 void ZQuickWidget::polishSyncAndRender()
 {
-    qDebug() << "processing:" << m_quickRenderer->mProcessState;
+    // qDebug() << "processing:" << m_quickRenderer->mProcessState;
 
     // 假如还在渲染中，就等待渲染完成后再处理
     // 期间不断处理其他事件（键盘、鼠标、绘制等）
@@ -419,7 +419,7 @@ void ZQuickWidget::polishSyncAndRender()
     m_quickRenderer->requestRender();
     qApp->processEvents();
 
-    qDebug() << "主窗口渲染耗时-->b:" << timer.elapsed();
+    // qDebug() << "主窗口渲染耗时-->b:" << timer.elapsed();
 
     // Wait until sync is complete.
     m_quickRenderer->cond()->wait(m_quickRenderer->mutex());
@@ -430,7 +430,7 @@ void ZQuickWidget::polishSyncAndRender()
     //     QThread::msleep(100);
     // }
 
-    qDebug() << "主窗口渲染耗时:" << timer.elapsed();
+    // qDebug() << "主窗口渲染耗时:" << timer.elapsed();
 
     // without blocking？ 前面的wait不是已经bloking了吗？
 
@@ -495,17 +495,6 @@ void ZQuickWidget::startQuick(const QString &filename)
     else
         run();
 }
-
-// void ZQuickWidget::exposeEvent(QExposeEvent *)
-// {
-//     if (isExposed()) {
-//         if (!m_quickInitialized)
-//         {
-//             // startQuick(QStringLiteral("qrc:/qml/MyScene.qml"));
-//             startQuick(mQmlFile);
-//         }
-//     }
-// }
 
 void ZQuickWidget::resizeEvent(QResizeEvent *)
 {

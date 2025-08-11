@@ -8,6 +8,8 @@
 #include <QCalendarWidget>
 #include <QTimer>
 
+#include <QQuickWidget>
+
 #include "../zquickwidget.h"
 
 int main(int argc, char *argv[])

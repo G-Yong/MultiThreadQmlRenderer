@@ -7,6 +7,8 @@
 #include <QThread>
 #include <QWaitCondition>
 #include <QMutex>
+#include <QQmlContext>
+#include <QQmlEngine>
 
 QT_FORWARD_DECLARE_CLASS(QOpenGLContext)
 QT_FORWARD_DECLARE_CLASS(QOpenGLFramebufferObject)
@@ -82,10 +84,14 @@ public:
     ZQuickWidget(QWidget *parent = nullptr);
     ~ZQuickWidget();
 
+    QQmlEngine *engine() const{return m_qmlEngine;}
+    QQuickWindow *quickWindow() const{return m_quickWindow;}
+    QQmlContext *rootContext() const{return m_qmlEngine->rootContext();}
+    QQuickItem *rootObject() const{return m_rootItem;}
+
     int setSource(QUrl url);
 
 protected:
-    // void exposeEvent(QExposeEvent *e) override;
     void resizeEvent(QResizeEvent *e) override;
     void mousePressEvent(QMouseEvent *e) override;
     void mouseReleaseEvent(QMouseEvent *e) override;
@@ -98,8 +104,6 @@ private slots:
     void requestUpdate();
     void polishSyncAndRender();
 
-public:
-    QQmlEngine *m_qmlEngine;
 
 private:
     void startQuick(const QString &filename);
@@ -112,7 +116,7 @@ private:
     QOffscreenSurface *m_offscreenSurface;
     QQuickRenderControl *m_renderControl;
     QQuickWindow *m_quickWindow;
-    // QQmlEngine *m_qmlEngine;
+    QQmlEngine *m_qmlEngine;
     QQmlComponent *m_qmlComponent;
     QQuickItem *m_rootItem;
     bool m_quickInitialized;
