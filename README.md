@@ -1,0 +1,2 @@
+# MultiThreadQmlRenderer
+使用多线程来渲染qml，使得主线程能够具备更好的实时性
