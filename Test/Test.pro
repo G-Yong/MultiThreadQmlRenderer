@@ -1,6 +1,6 @@
 QT += quick
 QT += widgets
-QT += quickwidgets
+QT += quickwidgets concurrent
 
 # You can make your code fail to compile if it uses deprecated APIs.
 # In order to do so, uncomment the following line.
@@ -8,7 +8,9 @@ QT += quickwidgets
 
 SOURCES += \
         ../zquickwidget.cpp \
-        main.cpp
+        multiThread/mtwindow.cpp \
+        multiThread/planerenderer.cpp \
+        main.cpp \
 
 RESOURCES += qml.qrc
 
@@ -24,4 +26,6 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
 HEADERS += \
-    ../zquickwidget.h
+    ../zquickwidget.h \
+    multiThread/mtwindow.h \
+    multiThread/planerenderer.h

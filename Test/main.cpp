@@ -11,6 +11,7 @@
 #include <QQuickWidget>
 
 #include "../zquickwidget.h"
+#include "multiThread/mtwindow.h"
 
 int main(int argc, char *argv[])
 {
@@ -25,17 +26,26 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
 
 
+// #define USE_WINDOW
 #define USE_CUSTOM
-#ifdef USE_CUSTOM
-    // 自行实现的qml渲染器
+
+
+#ifdef USE_WINDOW
+    // Qt原装的例程改造的，可以测试opengl的渲染
+    MTWindow *tWin = new MTWindow(QStringLiteral("qrc:/main.qml"));
+    QWidget *qWidget = QWidget::createWindowContainer(tWin);
+#elif defined(USE_CUSTOM)
+    // 基于Qt例程实现的qml渲染器
     ZQuickWidget *qWidget = new ZQuickWidget();
 #else
     // Qt自带的渲染引擎
     QQuickWidget *qWidget = new QQuickWidget();
 #endif
+
+#ifndef USE_WINDOW
     qWidget->setSource(QUrl("qrc:/main.qml"));
     qWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
-
+#endif
 
     // 主界面元素，可以查看UI线程是否保持正常的实时性
     QProgressBar *bar = new QProgressBar(qWidget);
@@ -61,6 +71,7 @@ int main(int argc, char *argv[])
     widget.setLayout(layout);
     widget.resize(800, 600);
     widget.show();
+    // widget.showMaximized();
 
 
     return app.exec();

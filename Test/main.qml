@@ -66,11 +66,12 @@ Rectangle{
             //             worldDirection: Qt.vector3d(0, 0, -1)
             //             intensity: 0.5
             //             color: "#ffffff"
-            //         },
-            //         SpotLight {
-            //             intensity: 1
-            //             color: "#ffffff"
             //         }
+            //         // ,
+            //         // SpotLight {
+            //         //     intensity: 1
+            //         //     color: "#ffffff"
+            //         // }
             //     ]
             // }
 
@@ -135,7 +136,18 @@ Rectangle{
                             radius: 1
                             rings: 100  // 降低精度提高性能
                             slices: 100
-                        },
+                        }
+                        // ,
+                        // DiffuseMapMaterial {
+                        //     ambient: Qt.rgba(Math.random(), Math.random(), Math.random(), 1.0)
+                        //     diffuse: Texture2D {
+                        //         textureImages: TextureImage {
+                        //             id: diffuseTextureImage
+                        //             source: "qrc:/code.png"
+                        //         }
+                        //     }
+                        // }
+                        ,
                         PhongMaterial {
                             diffuse: Qt.rgba(Math.random(), Math.random(), Math.random(), 1.0)
                         }

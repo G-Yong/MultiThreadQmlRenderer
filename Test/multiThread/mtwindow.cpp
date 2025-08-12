@@ -1,5 +1,7 @@
-﻿#include "zquickwidget.h"
+﻿#include "mtwindow.h"
 
+#include "mtwindow.h"
+#include "planerenderer.h"
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QOpenGLFramebufferObject>
@@ -15,29 +17,40 @@
 #include <QQuickRenderControl>
 #include <QCoreApplication>
 
-#include <QTimer>
 #include <QDateTime>
 #include <QElapsedTimer>
-#include <QPainter>
+#include <QtConcurrentRun>
 
-using namespace ZQuick;
+/*
+  This implementation runs the Qt Quick scenegraph's sync and render phases on a
+  separate, dedicated thread.  Rendering the cube using our custom OpenGL engine
+  happens on that thread as well.  This is similar to the built-in threaded
+  render loop, but does not support all the features. There is no support for
+  getting Animators running on the render thread for example.
 
-static const QEvent::Type INIT   = QEvent::Type(QEvent::User + 1);
+  We choose to use QObject's event mechanism to communicate with the QObject
+  living on the render thread. An alternative would be to subclass QThread and
+  reimplement run() with a custom event handling approach, like
+  QSGThreadedRenderLoop does. That would potentially lead to better results but
+  is also more complex.
+*/
+
+static const QEvent::Type INIT = QEvent::Type(QEvent::User + 1);
 static const QEvent::Type RENDER = QEvent::Type(QEvent::User + 2);
 static const QEvent::Type RESIZE = QEvent::Type(QEvent::User + 3);
-static const QEvent::Type STOP   = QEvent::Type(QEvent::User + 4);
+static const QEvent::Type STOP = QEvent::Type(QEvent::User + 4);
 
 static const QEvent::Type UPDATE = QEvent::Type(QEvent::User + 5);
 
 QuickRenderer::QuickRenderer()
-    :
-    m_context(nullptr),
+    : m_context(nullptr),
     m_surface(nullptr),
     m_fbo(nullptr),
+    m_window(nullptr),
     m_quickWindow(nullptr),
     m_renderControl(nullptr),
-    m_quit(false),
-    m_widget(nullptr)
+    m_planeRenderer(nullptr),
+    m_quit(false)
 {
 }
 
@@ -48,7 +61,6 @@ void QuickRenderer::requestInit()
 
 void QuickRenderer::requestRender()
 {
-    mHasPostRender = true;
     QCoreApplication::postEvent(this, new QEvent(RENDER));
 }
 
@@ -64,25 +76,33 @@ void QuickRenderer::requestStop()
 
 bool QuickRenderer::event(QEvent *e)
 {
+    mProcessing = true;
+
     QMutexLocker lock(&m_mutex);
 
     switch (int(e->type())) {
     case INIT:
         init();
+        // mProcessing = false;
         return true;
-    case RENDER:{
-        // 之所以主线程需要等那么久，是因为本线程还在处理，
+    case RENDER:
+        // 之所以主线程需要等那么久，是因为本线程还在处理渲染的事情，
         // 无法进入事件处理，因此一直在等待
+        // mProcessing = true;
         render(&lock);
-        mHasPostRender = false;
-    }
+        mProcessing = false;
         return true;
     case RESIZE:
+        if (m_planeRenderer)
+            m_planeRenderer->resize(m_window->width(), m_window->height());
+        mProcessing = false;
         return true;
     case STOP:
         cleanup();
+        mProcessing = false;
         return true;
     default:
+        mProcessing = false;
         return QObject::event(e);
     }
 }
@@ -95,6 +115,8 @@ void QuickRenderer::init()
     // have something is can make current during cleanup. QOffscreenSurface,
     // just like QWindow, must always be created on the gui thread (as it might
     // be backed by an actual QWindow).
+    m_planeRenderer = new PlaneRenderer(m_surface);
+    m_planeRenderer->resize(m_window->width(), m_window->height());
 
     m_renderControl->initialize(m_context);
 }
@@ -108,6 +130,9 @@ void QuickRenderer::cleanup()
     delete m_fbo;
     m_fbo = nullptr;
 
+    delete m_planeRenderer;
+    m_planeRenderer = nullptr;
+
     m_context->doneCurrent();
     m_context->moveToThread(QCoreApplication::instance()->thread());
 
@@ -116,13 +141,13 @@ void QuickRenderer::cleanup()
 
 void QuickRenderer::ensureFbo()
 {
-    if (m_fbo && m_fbo->size() != m_widget->size() * m_widget->devicePixelRatio()) {
+    if (m_fbo && m_fbo->size() != m_window->size() * m_window->devicePixelRatio()) {
         delete m_fbo;
         m_fbo = nullptr;
     }
 
     if (!m_fbo) {
-        m_fbo = new QOpenGLFramebufferObject(m_widget->size() * m_widget->devicePixelRatio(),
+        m_fbo = new QOpenGLFramebufferObject(m_window->size() * m_window->devicePixelRatio(),
                                              QOpenGLFramebufferObject::CombinedDepthStencil);
         m_quickWindow->setRenderTarget(m_fbo);
     }
@@ -130,18 +155,13 @@ void QuickRenderer::ensureFbo()
 
 void QuickRenderer::render(QMutexLocker *lock)
 {
-    static int counter = 0;
-    counter++;
-
-    mProcessState = 1;
-    mFinished = false;
-
     QElapsedTimer timer;
     timer.start();
 
+    Q_ASSERT(QThread::currentThread() != m_window->thread());
+
     if (!m_context->makeCurrent(m_surface)) {
         qWarning("Failed to make context current on render thread");
-        mFinished = true;
         return;
     }
 
@@ -155,34 +175,25 @@ void QuickRenderer::render(QMutexLocker *lock)
     m_cond.wakeOne();
     lock->unlock();
 
-    mProcessState = 2;
-    mFinished = true;
-
-    qDebug() << "渲染同步到ui耗时：" << timer.elapsed() << counter;
+    // qDebug() << "渲染同步到ui耗时：" << timer.elapsed();
 
     // Meanwhile on this thread continue with the actual rendering (into the FBO first).
     m_renderControl->render();
     m_context->functions()->glFlush();
 
-    mProcessState = 3;
+    // The cube renderer uses its own context, no need to bother with the state here.
 
+    // Get something onto the screen using our custom OpenGL engine.
+    QMutexLocker quitLock(&m_quitMutex);
+    if (!m_quit)
+    {
+        QElapsedTimer timer;
+        timer.start();
+        m_planeRenderer->render(m_window, m_context, m_fbo->texture());
+        qDebug() << "绘制 耗时：" << timer.elapsed();
+    }
 
-    // 又刷新，又改变窗口大小时，有时会在这里卡死
-    // 是grab这个函数卡死
-    qDebug() << "获取图像：" << timer.elapsed() << counter;
-    // 这里是否需要copy还得测试测试。下面两种方式效率差不多
-    // QImage image = m_renderControl->grab().copy();
-    QImage image = m_quickWindow->grabWindow().copy();
-    // QImage image = m_fbo->toImage();
-    qDebug() << "开始发送图像：" << timer.elapsed() << counter;
-    emit rendered(image);
-
-    // 假如搞成QOpenGLWidget来渲染，性能可能会好一些
-    // 大概测试了一下， 耗时大约是从 45ms-》38ms 左右；感觉提升不大
-    qDebug() << "子线程渲染耗时：" << timer.elapsed() << mProcessState << counter;
-
-    // m_context->swapBuffers();
-
+    // qDebug() << "子线程渲染耗时：" << timer.elapsed();
 }
 
 void QuickRenderer::aboutToQuit()
@@ -191,52 +202,42 @@ void QuickRenderer::aboutToQuit()
     m_quit = true;
 }
 
-// 主要是这里要用到window
-namespace ZQuick {
 class RenderControl : public QQuickRenderControl
 {
 public:
-    explicit RenderControl(QObject *parent = nullptr) :
-        QQuickRenderControl(parent)
-    {
-
-    }
-    void setWindow(QWindow *w)
-    {
-        m_window = w;
-    }
-    QWindow *renderWindow(QPoint *offset) override{
-        if (offset)
-            *offset = QPoint(0, 0);
-
-        return m_window;
-    }
+    RenderControl(QWindow *w) : m_window(w) { }
+    QWindow *renderWindow(QPoint *offset) override;
 
 private:
-    QWindow *m_window = nullptr;
+    QWindow *m_window;
 };
+
+QWindow *RenderControl::renderWindow(QPoint *offset)
+{
+    if (offset)
+        *offset = QPoint(0, 0);
+    return m_window;
 }
 
 
-
-ZQuickWidget::ZQuickWidget(QWidget *parent)
-    :
-    QWidget(parent),
-    m_qmlComponent(nullptr),
+MTWindow::MTWindow(QString qmlFile)
+    : m_qmlComponent(nullptr),
     m_rootItem(nullptr),
     m_quickInitialized(false),
     m_psrRequested(false)
 {
-    // setSurfaceType(QSurface::OpenGLSurface);
+    mQmlFile = qmlFile;
 
-    // QSurfaceFormat format;
-    // // Qt Quick may need a depth and stencil buffer. Always make sure these are available.
-    // format.setDepthBufferSize(16);
-    // format.setStencilBufferSize(8);
-    // setFormat(format);
+    setSurfaceType(QSurface::OpenGLSurface);
+
+    QSurfaceFormat format;
+    // Qt Quick may need a depth and stencil buffer. Always make sure these are available.
+    format.setDepthBufferSize(16);
+    format.setStencilBufferSize(8);
+    setFormat(format);
 
     m_context = new QOpenGLContext;
-    m_context->setFormat(QSurfaceFormat::defaultFormat());
+    m_context->setFormat(format);
     m_context->create();
 
     m_offscreenSurface = new QOffscreenSurface;
@@ -254,9 +255,6 @@ ZQuickWidget::ZQuickWidget(QWidget *parent)
     // native (platform) window.
     m_quickWindow = new QQuickWindow(m_renderControl);
 
-    // 将窗口给回去，renderWindow这个函数会用到
-    ((RenderControl*)m_renderControl)->setWindow(m_quickWindow);
-
     // Create a QML engine.
     m_qmlEngine = new QQmlEngine;
     if (!m_qmlEngine->incubationController())
@@ -265,14 +263,9 @@ ZQuickWidget::ZQuickWidget(QWidget *parent)
     m_quickRenderer = new QuickRenderer;
     m_quickRenderer->setContext(m_context);
 
-    connect(m_quickRenderer, &QuickRenderer::rendered, this, [=](QImage img){
-        mImg = img;
-        update();
-    });
-
     // These live on the gui thread. Just give access to them on the render thread.
     m_quickRenderer->setSurface(m_offscreenSurface);
-    m_quickRenderer->setWidget(this);
+    m_quickRenderer->setWindow(this);
     m_quickRenderer->setQuickWindow(m_quickWindow);
     m_quickRenderer->setRenderControl(m_renderControl);
 
@@ -289,15 +282,14 @@ ZQuickWidget::ZQuickWidget(QWidget *parent)
 
     m_quickRendererThread->start();
 
-    // 现在不知道为啥，这两个信号都失效了
     // Now hook up the signals. For simplicy we don't differentiate
     // between renderRequested (only render is needed, no sync) and
     // sceneChanged (polish and sync is needed too).
-    connect(m_renderControl, &QQuickRenderControl::renderRequested, this, &ZQuickWidget::requestUpdate);
-    connect(m_renderControl, &QQuickRenderControl::sceneChanged,    this, &ZQuickWidget::requestUpdate);
+    connect(m_renderControl, &QQuickRenderControl::renderRequested, this, &MTWindow::requestUpdate);
+    connect(m_renderControl, &QQuickRenderControl::sceneChanged, this, &MTWindow::requestUpdate);
 }
 
-ZQuickWidget::~ZQuickWidget()
+MTWindow::~MTWindow()
 {
     // Release resources and move the context ownership back to this thread.
     m_quickRenderer->mutex()->lock();
@@ -315,27 +307,9 @@ ZQuickWidget::~ZQuickWidget()
 
     delete m_offscreenSurface;
     delete m_context;
-
-    delete m_quickRenderer;
 }
 
-int ZQuickWidget::setSource(QUrl url)
-{
-    mQmlFile = url.url();
-
-    startQuick(mQmlFile);
-
-    // 目前无法正常接收场景刷新信号，只能通过一个定时器来刷新
-    QTimer *uTimer = new QTimer();
-    connect(uTimer, &QTimer::timeout, this, [=](){
-        requestUpdate();
-    });
-    uTimer->start(30);
-
-    return 0;
-}
-
-void ZQuickWidget::requestUpdate()
+void MTWindow::requestUpdate()
 {
     if (m_quickInitialized && !m_psrRequested) {
         m_psrRequested = true;
@@ -343,7 +317,8 @@ void ZQuickWidget::requestUpdate()
     }
 }
 
-bool ZQuickWidget::event(QEvent *e)
+#include <QTimer>
+bool MTWindow::event(QEvent *e)
 {
     if (e->type() == UPDATE) {
         polishSyncAndRender();
@@ -358,91 +333,52 @@ bool ZQuickWidget::event(QEvent *e)
         m_quickRenderer->aboutToQuit();
     }
 
-    return QWidget::event(e);
+    return QWindow::event(e);
 }
 
-void ZQuickWidget::paintEvent(QPaintEvent *event)
+void MTWindow::polishSyncAndRender()
 {
-    Q_UNUSED(event)
+    // qDebug() << "processing:" << m_quickRenderer->mProcessing;
 
-    QPainter painter(this);
-    if(mImg.isNull() == false)
-    {
-        painter.drawImage(0, 0, mImg);
-    }
-}
-
-void ZQuickWidget::polishSyncAndRender()
-{
-    qDebug() << "processing:"
-             << m_quickRenderer->mProcessState
-             << m_quickRenderer->mHasPostRender;
-
-    // 假如还在渲染中，就等待渲染完成后再处理
-    // 期间不断处理其他事件（键盘、鼠标、绘制等）
-    // while (m_quickRenderer->mProcessState > 0 && m_quickRenderer->mProcessState != 3) {
+    // // 假如qml画面还在渲染中，就等待其渲染完成后再处理
+    // // 期间不断处理其他事件（键盘、鼠标、绘制等）
+    // while (m_quickRenderer->mProcessing == true) {
     //     qApp->processEvents();
-    //     // return;
     // }
-
-    // 假如还在渲染，
-    if(m_quickRenderer->mHasPostRender == true)
-    {
-        // // 处理其他事情
-        // qApp->processEvents();
-
-        // 就直接返回
-        return;
-    }
 
     QElapsedTimer timer;
     timer.start();
 
     // qDebug() << "主窗口请求渲染";
 
-    // Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(QThread::currentThread() == thread());
 
-    // 不执行polishItems，3d场景就渲染不出来
-    // // Polishing happens on the gui thread.
-    m_renderControl->polishItems(); // 这个耗时很厉害
+    // Polishing happens on the gui thread.
+    m_renderControl->polishItems();
 
-    qDebug() << "主窗口渲染耗时-->a:" << timer.elapsed();
+    // qDebug() << "主窗口渲染耗时-->a:" << timer.elapsed();
 
     // Sync happens on the render thread with the gui thread (this one) blocked.
     QMutexLocker lock(m_quickRenderer->mutex());
-    m_quickRenderer->requestRender(); // 发起渲染申请
+    m_quickRenderer->requestRender();
 
-    qDebug() << "主窗口渲染耗时-->b:" << timer.elapsed();
+    // qDebug() << "主窗口渲染耗时-->b:" << timer.elapsed();
 
-    // timer.start();
-
-    // 这里好像不怎么耗时。。。。。
     // Wait until sync is complete.
     m_quickRenderer->cond()->wait(m_quickRenderer->mutex());
 
-    // // 好像 QWaitCondition::wait 会有 unlock的效果？
-    // // 是不是需要unlock一下？
-    // // 前面不用QMutexLocker就行
-    // while (m_quickRenderer->mFinished == false) {
-    //     qApp->processEvents();
-    //     // qDebug() << m_quickRenderer->mProcessState
-    //     //          << m_quickRenderer->mHasPostRender;
-    //     // QThread::msleep(100);
-    // }
-
-    qDebug() << "主窗口渲染耗时:" << timer.elapsed();
+    // qDebug() << "主窗口渲染耗时:" << timer.elapsed();
 
     // without blocking？ 前面的wait不是已经bloking了吗？
+
     // Rendering happens on the render thread without blocking the gui (main)
     // thread. This is good because the blocking swap (waiting for vsync)
     // happens on the render thread, not blocking other work.
 }
 
-void ZQuickWidget::run()
+void MTWindow::run()
 {
-    qDebug() << "status changed:" << m_qmlComponent->status();
-
-    disconnect(m_qmlComponent, &QQmlComponent::statusChanged, this, &ZQuickWidget::run);
+    disconnect(m_qmlComponent, &QQmlComponent::statusChanged, this, &MTWindow::run);
 
     if (m_qmlComponent->isError()) {
         const QList<QQmlError> errorList = m_qmlComponent->errors();
@@ -479,7 +415,7 @@ void ZQuickWidget::run()
     polishSyncAndRender();
 }
 
-void ZQuickWidget::updateSizes()
+void MTWindow::updateSizes()
 {
     // Behave like SizeRootObjectToView.
     m_rootItem->setWidth(width());
@@ -488,16 +424,27 @@ void ZQuickWidget::updateSizes()
     m_quickWindow->setGeometry(0, 0, width(), height());
 }
 
-void ZQuickWidget::startQuick(const QString &filename)
+void MTWindow::startQuick(const QString &filename)
 {
     m_qmlComponent = new QQmlComponent(m_qmlEngine, QUrl(filename));
     if (m_qmlComponent->isLoading())
-        connect(m_qmlComponent, &QQmlComponent::statusChanged, this, &ZQuickWidget::run);
+        connect(m_qmlComponent, &QQmlComponent::statusChanged, this, &MTWindow::run);
     else
         run();
 }
 
-void ZQuickWidget::resizeEvent(QResizeEvent *)
+void MTWindow::exposeEvent(QExposeEvent *)
+{
+    if (isExposed()) {
+        if (!m_quickInitialized)
+        {
+            // startQuick(QStringLiteral("qrc:/qml/MyScene.qml"));
+            startQuick(mQmlFile);
+        }
+    }
+}
+
+void MTWindow::resizeEvent(QResizeEvent *)
 {
     // If this is a resize after the scene is up and running, recreate the fbo and the
     // Quick item and scene.
@@ -508,7 +455,7 @@ void ZQuickWidget::resizeEvent(QResizeEvent *)
     }
 }
 
-void ZQuickWidget::mousePressEvent(QMouseEvent *e)
+void MTWindow::mousePressEvent(QMouseEvent *e)
 {
     // Use the constructor taking localPos and screenPos. That puts localPos into the
     // event's localPos and windowPos, and screenPos into the event's screenPos. This way
@@ -518,13 +465,13 @@ void ZQuickWidget::mousePressEvent(QMouseEvent *e)
     QCoreApplication::sendEvent(m_quickWindow, &mappedEvent);
 }
 
-void ZQuickWidget::mouseReleaseEvent(QMouseEvent *e)
+void MTWindow::mouseReleaseEvent(QMouseEvent *e)
 {
     QMouseEvent mappedEvent(e->type(), e->localPos(), e->screenPos(), e->button(), e->buttons(), e->modifiers());
     QCoreApplication::sendEvent(m_quickWindow, &mappedEvent);
 }
 
-void ZQuickWidget::mouseMoveEvent(QMouseEvent *e)
+void MTWindow::mouseMoveEvent(QMouseEvent *e)
 {
     QMouseEvent mappedEvent(e->type(),
                             e->localPos(),
@@ -535,7 +482,7 @@ void ZQuickWidget::mouseMoveEvent(QMouseEvent *e)
     QCoreApplication::sendEvent(m_quickWindow, &mappedEvent);
 }
 
-void ZQuickWidget::wheelEvent(QWheelEvent *e)
+void MTWindow::wheelEvent(QWheelEvent *e)
 {
     QWheelEvent mappedEvent(e->position(),
                             e->globalPosition(),
